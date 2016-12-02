@@ -34,7 +34,7 @@ class Host::Discovered < ::Host::Base
     record.update_attribute(:managed, false)
   }
 
-  def self.import_host facts
+  def self.import_host facts, org = nil, loc = nil
     raise(::Foreman::Exception.new(N_("Invalid facts, must be a Hash"))) unless facts.is_a?(Hash)
 
     # filter facts
@@ -51,11 +51,20 @@ class Host::Discovered < ::Host::Base
     hostname = normalize_string_for_hostname("#{hostname_prefix}#{name_fact}")
     Rails.logger.warn "Hostname does not start with an alphabetical character" unless hostname.downcase.match /^[a-z]/
 
+    # set location and organization
+    if SETTINGS[:locations_enabled]
+      loc_id = Location.find_by_name(loc).try(:id)
+    end
+    if SETTINGS[:organizations_enabled]
+      org_id = Organization.find_by_name(org).try(:id)
+    end
+
+
     # find existing or create new host record
     bootif_mac = FacterUtils::bootif_mac(facts).try(:downcase)
     hosts = ::Nic::Managed.where(:mac => bootif_mac, :primary => true)
     if hosts.size == 0
-      host = Host.new(:name => hostname, :type => "Host::Discovered")
+      host = Host.new(:name => hostname, :type => "Host::Discovered", :organization_id => org_id, :location_id => loc_id)
     else
       Rails.logger.warn "Multiple discovered hosts found with MAC address #{name_fact}, choosing one" if hosts.size > 1
       host = hosts.first.host
@@ -102,16 +111,20 @@ class Host::Discovered < ::Host::Base
       self.primary_interface.subnet = subnet
       # set location and organization
       if SETTINGS[:locations_enabled]
-        self.location = Location.find_by_title(Setting[:discovery_location]) ||
-          subnet.try(:locations).try(:first) ||
-          Location.first
-        Rails.logger.info "Assigned location: #{self.location}"
+        unless self.location.present?
+          self.location = Location.find_by_title(Setting[:discovery_location]) ||
+            subnet.try(:locations).try(:first) ||
+            Location.first
+          Rails.logger.info "Assigned location: #{self.location}"
+        end
       end
       if SETTINGS[:organizations_enabled]
-        self.organization = Organization.find_by_title(Setting[:discovery_organization]) ||
-          subnet.try(:organizations).try(:first) ||
-          Organization.first
-        Rails.logger.info "Assigned organization: #{self.organization}"
+        unless self.organization.present?
+          self.organization = Organization.find_by_title(Setting[:discovery_organization]) ||
+            subnet.try(:organizations).try(:first) ||
+            Organization.first
+          Rails.logger.info "Assigned organization: #{self.organization}"
+        end
       end
     else
       raise(::Foreman::Exception.new(N_("Unable to assign subnet, primary interface is missing IP address")))
